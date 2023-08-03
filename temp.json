@@ -1,0 +1,352 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "appResourceGroup": {
+            "type": "string"
+        },
+        "appInsightsName": {
+            "type": "string"
+        },
+        "outboundUri": {
+            "type": "string"
+        },
+        "apimName": {
+            "type": "String"
+        },
+        "apimResourceGroup": {
+            "type": "String"
+        },
+        "environmentName": {
+            "type": "string",
+            "metadata": {
+                "description": "The environment (e.g. Dev, SIT, UAT, Prod)"
+            },
+            // "allowedValues": [
+            //     "Dev",
+            //     "SIT",
+            //     "UAT",
+            //     "Prod"
+            // ],
+            "defaultValue": "Dev",
+            "minLength": 1
+        },
+        "branchPath": {
+            "type": "string",
+            "metadata": {
+                "description": "The branch path"
+            },
+            "minLength": 1
+        },
+        "appName": {
+            "type": "string",
+            "metadata": {
+                "description": "The application name"
+            },
+            "minLength": 5,
+            "defaultValue": "[resourceGroup().name]"
+        },
+        "displayName": {
+            "type": "string",
+            "metadata": {
+                "description": "The application display name"
+            }
+        },
+        "apimSubscriptionKey": {
+            "type": "string",
+            "defaultValue": "[newGuid()]"
+        },
+        "majorVersion": {
+            "type": "string",
+            "metadata": {
+                "description": "The major version of the application"
+            }
+        },
+        "appNamePathOverride": {
+            "type": "string",
+            "metadata": {
+                "description": "The API path override"
+            }
+        },
+        "subscriptionRequired": {
+            "type": "bool",
+            "defaultValue": true
+        },
+        "storageUri": {
+            "type": "string"
+        },
+        "sasToken": {
+            "type": "string"
+        },
+        "operations": {
+            "type": "Array"
+        },
+        "httpCorrelationProtocol": {
+            "type": "string",
+            "metadata": {
+                "description": "The HTTP correllation protocol to use."
+            },
+            "allowedValues": [
+                "None",
+                "Legacy",
+                "W3C"
+            ],
+            "defaultValue": "W3C"
+        },
+        "mtlsOutboundCertificateName": {
+            "type": "string",
+            "metadata": {
+                "description": "The name of the certificate to be used to make an outbound call to the backend."
+            },
+            "defaultValue": ""
+        },
+        "enablePipelineLogging": {
+            "type": "bool",
+            "metadata": {
+                "description": "Whether to enable pipeline logging for all requests. This should be used only in environments with test data."
+            },
+            "defaultValue": false
+        },
+        "logHeaders": {
+            "type": "Array",
+            "metadata": {
+                "description": "The headers to log when pipeline logging (via enablePipelineLogging) is on."
+            },
+            "defaultValue": []
+        },
+        "productName": {
+            "type": "string",
+            "metadata": {
+                "description": "The product name"
+            },
+            "defaultValue": ""
+        }
+    },
+    "variables": {
+        "branchName": "[toLower(last(split(parameters('branchPath'), '/')))]",
+        "useEnvName": "[not(equals(parameters('environmentName'), 'Prod'))]",
+        "useBranchName": "[not(equals(variables('branchName'),'master'))]",
+        "envSuffix": "[if(variables('useEnvName'),concat('-',parameters('environmentName')),'')]",
+        "appName": "[if(variables('useBranchName'), toLower(format('{0}{1}-{2}', parameters('appName'), variables('envSuffix'), variables('branchName'))), toLower(format('{0}{1}', parameters('appName'), variables('envSuffix'))))]",
+        "displayName": "[if(variables('useBranchName'), concat(coalesce(parameters('displayName'), parameters('appName')), ' [', variables('branchName'), ']'), coalesce(parameters('displayName'), parameters('appName')))]",
+        "apimSubscriptionKey": "[base64(guid(parameters('apimSubscriptionKey')))]",
+        "apiPathName": "[if(empty(parameters('appNamePathOverride')), concat(parameters('appName'), variables('envSuffix')), parameters('appNamePathOverride'))]",
+        "apiPath": "[if(variables('useBranchName'), toLower(format('{0}/{1}', variables('apiPathName'), variables('branchName'))), toLower(variables('apiPathName')))]",
+        "apiVersionSetFriendlyName": "[variables('displayName')]",
+        "apiVersionSetName": "[guid(variables('apiVersionSetFriendlyName'))]",
+        "apiProductName": "[if(equals(parameters('productName'), ''), parameters('appName'), parameters('productName'))]",
+        "appInsightsLoggerCredentialsName": "[concat('Logger-Credentials-', parameters('appInsightsName'))]",
+        "mtlsCertificateName": "[format('ext-{0}-client-certificate-id', toLower(parameters('appName')))]",
+        "swaggerUrl": "[concat(parameters('storageUri'), '/apis/OpenApiDocument.OpenApi3_0.json', parameters('sasToken'))]",
+        "apimServiceIdentityResourceId": "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "copy": [
+            {
+                "name": "operations",
+                "count": "[length(parameters('operations'))]",
+                "input": {
+                    "name": "[replace(parameters('operations')[copyIndex('operations')], '.xml', '')]",
+                    "resourceName": "[concat(parameters('apimName'), '/', variables('appName'), '/', replace(parameters('operations')[copyIndex('operations')], '.xml', ''), '/policy')]",
+                    "policyFile": "[concat(parameters('storageUri'), '/apis/policies/', parameters('operations')[copyIndex('operations')], parameters('sasToken'))]"
+                }
+            }
+        ],
+        "environmentsToLog": [ "Dev", "SIT", "UAT", "Prod" ],
+        "enablePipelineLogging": "[or(contains(variables('environmentsToLog'), parameters('environmentName')), parameters('enablePipelineLogging'))]",
+        "pipelineDiagnosticSettings": {
+            "request": {
+                "headers": "[parameters('logHeaders')]",
+                "body": {
+                    "bytes": 8192
+                }
+            },
+            "response": {
+                "headers": "[parameters('logHeaders')]",
+                "body": {
+                    "bytes": 8192
+                }
+            }
+        }
+    },
+    "resources": [
+        {
+            "type": "Microsoft.ApiManagement/service/apiVersionSets",
+            "apiVersion": "2019-01-01",
+            "name": "[concat(parameters('apimName'), '/', variables('apiVersionSetName'))]",
+            "properties": {
+                "displayName": "[variables('apiVersionSetFriendlyName')]",
+                "versioningScheme": "Segment"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/apis",
+            "apiVersion": "2019-12-01",
+            "name": "[concat(parameters('apimName'), '/', variables('appName'))]",
+            "dependsOn": [
+                "[resourceId(parameters('apimResourceGroup'),'Microsoft.ApiManagement/service/apiVersionSets', parameters('apimName'), variables('apiVersionSetName'))]"
+            ],
+            "properties": {
+                "displayName": "[variables('displayName')]",
+                "apiRevision": "1", // not sure if we can drive this off the minor version or not
+                "description": "[format('Import from \"{0}\" Apim App', variables('appName'))]",
+                "subscriptionRequired": "[parameters('subscriptionRequired')]",
+                "path": "[variables('apiPath')]",
+                "format": "openapi+json-link",
+                "value": "[variables('swaggerUrl')]",
+                "protocols": [
+                    "https"
+                ],
+                "isCurrent": true,
+                "apiVersion": "[format('v{0}', parameters('majorVersion'))]",
+                "apiVersionSetId": "[resourceId(parameters('apimResourceGroup'),'Microsoft.ApiManagement/service/apiVersionSets', parameters('apimName'), variables('apiVersionSetName'))]"
+            },
+            "resources": [
+                {
+                    "type": "policies",
+                    "apiVersion": "2019-12-01",
+                    "name": "policy",
+                    "dependsOn": [
+                        "[resourceId(parameters('apimResourceGroup'), 'Microsoft.ApiManagement/service/apis', parameters('apimName'), variables('appName'))]"
+                    ],
+                    "properties": {
+                        "value": "[concat(parameters('storageUri'), '/apis/policies/', 'all.xml', parameters('sasToken'))]",
+                        "format": "rawxml-link"
+                    }
+                },
+                {
+                    "type": "diagnostics",
+                    "apiVersion": "2019-01-01",
+                    "name": "applicationinsights",
+                    "dependsOn": [
+                        "[resourceId(parameters('apimResourceGroup'), 'Microsoft.ApiManagement/service/apis', parameters('apimName'), variables('appName'))]",
+                        "[resourceId(parameters('apimResourceGroup'), 'Microsoft.ApiManagement/service/loggers', parameters('apimName'),  parameters('appInsightsName'))]"
+                    ],
+                    "properties": {
+                        "alwaysLog": "allErrors",
+                        "loggerId": "[resourceId('Microsoft.ApiManagement/service/loggers', parameters('apimName'),  parameters('appInsightsName'))]",
+                        "sampling": {
+                            "samplingType": "fixed",
+                            "percentage": 100
+                        },
+                        "frontend": "[if(variables('enablePipelineLogging'), variables('pipelineDiagnosticSettings'), json('{}'))]",
+                        "backend": "[if(variables('enablePipelineLogging'), variables('pipelineDiagnosticSettings'), json('{}'))]",
+                        "httpCorrelationProtocol": "[parameters('httpCorrelationProtocol')]"
+                    }
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+            "apiVersion": "2019-01-01",
+            "name": "[variables('operations')[copyIndex('operationsCopy')].resourceName]",
+            "dependsOn": [
+                "[resourceId(parameters('apimResourceGroup'), 'Microsoft.ApiManagement/service/apis', parameters('apimName'), variables('appName'))]"
+            ],
+            "properties": {
+                "value": "[variables('operations')[copyIndex('operationsCopy')].policyFile]",
+                "format": "rawxml-link"
+            },
+            "copy": {
+                "name": "operationsCopy",
+                "count": "[length(variables('operations'))]"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products",
+            "apiVersion": "2019-01-01",
+            "name": "[concat(parameters('apimName'), '/', variables('apiProductName'))]",
+            "dependsOn": [
+            ],
+            "properties": {
+                "displayName": "[variables('apiProductName')]",
+                "description": "[variables('apiProductName')]",
+                "subscriptionRequired": "[parameters('subscriptionRequired')]",
+                "state": "published"
+            },
+            "resources": [
+                {
+                    "type": "apis",
+                    "apiVersion": "2019-01-01",
+                    "name": "[variables('appName')]",
+                    "dependsOn": [
+                        "[resourceId(parameters('apimResourceGroup'), 'Microsoft.ApiManagement/service/apis', parameters('apimName'), variables('appName'))]",
+                        "[resourceId(parameters('apimResourceGroup'), 'Microsoft.ApiManagement/service/products', parameters('apimName'), variables('apiProductName'))]"
+                    ],
+                    "properties": {
+                    }
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/properties",
+            "apiVersion": "2019-01-01",
+            "name": "[concat(parameters('apimName'), '/outbound-', parameters('appName'), '-uri')]",
+            "properties": {
+                "displayName": "[concat('outbound-',parameters('appName'),'-uri')]",
+                "value": "[parameters('outboundUri')]",
+                "tags": [
+                    "outbound"
+                ],
+                "secret": false
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/loggers",
+            "apiVersion": "2019-01-01",
+            "name": "[concat(parameters('apimName'), '/', parameters('appInsightsName'))]",
+            "dependsOn": [
+                "[resourceId(parameters('apimResourceGroup'), 'Microsoft.ApiManagement/service/namedValues', parameters('apimName'), variables('appInsightsLoggerCredentialsName'))]"
+            ],
+            "properties": {
+                "loggerType": "applicationInsights",
+                "credentials": {
+                    "instrumentationKey": "[concat('{{',variables('appInsightsLoggerCredentialsName'),'}}')]"
+                },
+                "isBuffered": true,
+                "resourceId": "[resourceId(parameters('appResourceGroup'), 'microsoft.insights/components/', parameters('appInsightsName'))]"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/namedValues",
+            "apiVersion": "2019-12-01-preview",
+            "name": "[concat(parameters('apimName'), '/', variables('appInsightsLoggerCredentialsName'))]",
+            "dependsOn": [
+            ],
+            "properties": {
+                "displayName": "[variables('appInsightsLoggerCredentialsName')]",
+                "secret": true,
+                "value": "[reference(resourceId(parameters('appResourceGroup'), 'microsoft.insights/components/', parameters('appInsightsName')), '2015-05-01').InstrumentationKey]"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/namedValues",
+            "apiVersion": "2019-12-01-preview",
+            "name": "[concat(parameters('apimName'), '/', variables('mtlsCertificateName'))]",
+            "dependsOn": [],
+            "condition": "[not(empty(parameters('mtlsOutboundCertificateName')))]",
+            "properties": {
+                "displayName": "[variables('mtlsCertificateName')]",
+                "secret": true,
+                "value": "[parameters('mtlsOutboundCertificateName')]"
+            }
+        }
+    ],
+    "outputs": {
+        "identityResourceId": {
+            "type": "string",
+            "value": "[reference(variables('apimServiceIdentityResourceId'), '2019-01-01', 'Full').identity.principalId]"
+        },
+        "ApiBaseUrl": {
+            "type": "string",
+            "value": "[uri(reference(resourceId(parameters('apimResourceGroup'), 'Microsoft.ApiManagement/service', parameters('apimName')), '2019-01-01').gatewayUrl, variables('apiPath'))]"
+        },
+        "ApiAuthKey": {
+            "type": "string",
+            "value": "[variables('apimSubscriptionKey')]"
+        },
+        "MtlsOutboundCertificateNamedValue": {
+            "type": "string",
+            "condition": "[not(empty(parameters('mtlsOutboundCertificateName')))]",
+            "value": "[variables('mtlsCertificateName')]"
+        }
+    }
+}
